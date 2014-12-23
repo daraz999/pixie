@@ -42,6 +42,13 @@ class QueryBuilderHandler
     protected $adapterInstance;
 
     /**
+     * The PDO fetch mode to use
+     *
+     * @var int
+     */
+    protected $fetchMode = \PDO::FETCH_ASSOC;
+
+    /**
      * @param null|\Pixie\Connection $connection
      *
      * @throws \Pixie\Exception
@@ -71,6 +78,16 @@ class QueryBuilderHandler
     }
 
     /**
+     * Set the fetch mode
+     *
+     * @param $mode
+     */
+    public function setFetchMode($mode)
+    {
+        $this->fetchMode = $mode;
+    }
+
+    /**
      * @param null|\Pixie\Connection $connection
      *
      * @return static
@@ -92,22 +109,34 @@ class QueryBuilderHandler
      */
     public function query($sql, $bindings = array())
     {
+        $this->pdoStatement = $this->statement($sql, $bindings);
+        
+        return $this;
+    }
+    
+    /**
+     * @param       $sql
+     * @param array $bindings
+     *
+     * @return $this
+     */
+    public function statement($sql, $bindings = array())
+    {
         $pdoStatement = $this->pdo->prepare($sql);
         $pdoStatement->execute($bindings);
-        $this->pdoStatement = $pdoStatement;
-        return $this;
+        return $pdoStatement;
     }
 
     /**
      * Get all rows
      *
-     * @return \stdClass|null
+     * @return \array|null
      */
     public function get()
     {
         $this->fireEvents('before-select');
         $this->preparePdoStatement();
-        $result = $this->pdoStatement->fetchAll(\PDO::FETCH_CLASS);
+        $result = $this->pdoStatement->fetchAll($this->fetchMode);
         $this->pdoStatement = null;
         $this->fireEvents('after-select', $result);
         return $result;
@@ -116,7 +145,7 @@ class QueryBuilderHandler
     /**
      * Get first row
      *
-     * @return \stdClass|null
+     * @return \array|null
      */
     public function first()
     {
@@ -129,7 +158,7 @@ class QueryBuilderHandler
      * @param        $value
      * @param string $fieldName
      *
-     * @return null|\stdClass
+     * @return null|\array
      */
     public function findAll($fieldName, $value)
     {
@@ -141,7 +170,7 @@ class QueryBuilderHandler
      * @param        $value
      * @param string $fieldName
      *
-     * @return null|\stdClass
+     * @return null|\array
      */
     public function find($value, $fieldName = 'id')
     {
@@ -156,7 +185,40 @@ class QueryBuilderHandler
      */
     public function count()
     {
-        return $this->aggregate('count');
+        return $this->aggregate('count(*)');
+    }
+
+    /**
+     * Get distinct count of rows by field
+     *
+     * @param $field string
+     * @return int
+     */
+    public function countDistinct($field)
+    {
+        return $this->aggregate('count(distinct(' . $field . '))');
+    }
+
+    /**
+     * Get max value by field
+     *
+     * @param $field string
+     * @return int
+     */
+    public function max($field)
+    {
+        return $this->aggregate('max(' . $field . ')');
+    }
+
+    /**
+     * Get min value by field
+     *
+     * @param $field string
+     * @return int
+     */
+    public function min($field)
+    {
+        return $this->aggregate('min(' . $field . ')');
     }
 
     /**
@@ -169,7 +231,7 @@ class QueryBuilderHandler
         // Get the current selects
         $mainSelects = isset($this->statements['selects']) ? $this->statements['selects'] : null;
         // Replace select with a scalar value like `count`
-        $this->statements['selects'] = array($this->raw($type . '(*) as field'));
+        $this->statements['selects'] = array($this->raw($type . ' as field'));
         $row = $this->get();
 
         // Set the select as it was
@@ -179,7 +241,7 @@ class QueryBuilderHandler
             unset($this->statements['selects']);
         }
 
-        return isset($row[0]->field) ? (int) $row[0]->field : 0;
+        return isset($row[0]['field']) ? (int) $row[0]['field'] : 0;
     }
 
     /**
@@ -191,7 +253,7 @@ class QueryBuilderHandler
      */
     public function getQuery($type = 'select', $dataToBePassed = array())
     {
-        $allowedTypes = array('select', 'insert', 'delete', 'update', 'criteriaonly');
+        $allowedTypes = array('select', 'insert', 'insertignore', 'replace', 'delete', 'update', 'criteriaonly');
         if (!in_array(strtolower($type), $allowedTypes)) {
             throw new Exception($type . ' is not a known type.', 2);
         }
@@ -222,44 +284,156 @@ class QueryBuilderHandler
 
     /**
      * @param $data
+     * @param $type
      *
      * @return array|string
      */
-    public function insert($data)
+    private function doInsert($data, $type)
     {
         $this->fireEvents('before-insert');
         // If first value is not an array
         // Its not a batch insert
         if (!is_array(current($data))) {
-            $queryObject = $this->getQuery('insert', $data);
-            $this->query($queryObject->getSql(), $queryObject->getBindings());
 
-            $return = $this->pdo->lastInsertId();
+            $queryObject = $this->getQuery($type, $data);
+
+            $result = $this->statement($queryObject->getSql(), $queryObject->getBindings());
+
+            $return = $result->rowCount() === 1 ? $this->pdo->lastInsertId() : null;
         } else {
             // Its a batch insert
             $return = array();
             foreach ($data as $subData) {
-                $queryObject = $this->getQuery('insert', $subData);
-                $this->query($queryObject->getSql(), $queryObject->getBindings());
-                $return[] = $this->pdo->lastInsertId();
+
+                $queryObject = $this->getQuery($type, $subData);
+
+                $result = $this->statement($queryObject->getSql(), $queryObject->getBindings());
+
+                if($result->rowCount() === 1){
+                    $return[] = $this->pdo->lastInsertId();
+                }
             }
         }
 
         $this->fireEvents('after-insert', $return);
+
         return $return;
+    }
+
+    /**
+     *
+     * Method to load data without response
+     *
+     * @param array $columns
+     * @param array $data
+     * @return \PDOStatement|string
+     * @throws \Pixie\Exception
+     */
+    public function loadDataInfile(array $columns, array $data)
+    {
+        if (!isset($this->statements['tables'])) {
+            throw new Exception('No table specified', 3);
+        } elseif (count($columns) < 1) {
+            throw new Exception('No columns given.', 4);
+        } elseif (count($data) < 1) {
+            throw new Exception('No data given.', 5);
+        }
+
+        $table = end($this->statements['tables']);
+
+        $columns = implode(',', $columns);
+
+        $file_name = tempnam(sys_get_temp_dir(), md5(time()) . date('Y-m-d') . uniqid() . '_insert');
+
+        $file = fopen($file_name, "w") or die("Unable to open file!");
+
+        foreach ( $data as $line ) {
+
+            $txt_line = implode(',', $line) . "\n";
+            fwrite($file, $txt_line);
+
+        }
+
+        fclose($file);
+
+        $sql = "LOAD DATA LOCAL INFILE '" . $file_name . "'
+                INTO TABLE `" . $table . "`
+                FIELDS TERMINATED BY ','
+                OPTIONALLY ENCLOSED BY '\"'
+                LINES TERMINATED BY '\\n'
+                ($columns)";
+
+        $pdoStatement = $this->pdo->prepare($sql);
+
+        try {
+
+            if( $pdoStatement->execute() ){
+                unlink($file_name);
+            }
+
+            return $pdoStatement;
+        } catch ( Exception $e ){
+            return $e->getMessage(); //return exception
+        }
     }
 
     /**
      * @param $data
      *
-     * @return void
+     * @return array|string
+     */
+    public function insert($data)
+    {
+        return $this->doInsert($data, 'insert');
+    }
+
+    /**
+     * @param $data
+     *
+     * @return array|string
+     */
+    public function insertIgnore($data)
+    {
+        return $this->doInsert($data, 'insertignore');
+    }
+
+    /**
+     * @param $data
+     *
+     * @return array|string
+     */
+    public function replace($data)
+    {
+        return $this->doInsert($data, 'replace');
+    }
+
+    /**
+     * @param $data
+     *
+     * @return $this
      */
     public function update($data)
     {
         $this->fireEvents('before-update');
         $queryObject = $this->getQuery('update', $data);
-        $this->query($queryObject->getSql(), $queryObject->getBindings());
+        $response = $this->statement($queryObject->getSql(), $queryObject->getBindings());
         $this->fireEvents('after-update', $queryObject);
+        
+        return $response;
+    }
+
+    /**
+     * @param $data
+     *
+     * @return array|string
+     */
+    public function updateOrInsert($data)
+    {
+        if ($this->first()) {
+            return $this->update($data);
+        } else {
+            return $this->insert($data);
+        }
     }
 
     /**
@@ -269,8 +443,10 @@ class QueryBuilderHandler
     {
         $this->fireEvents('before-delete');
         $queryObject = $this->getQuery('delete');
-        $this->query($queryObject->getSql(), $queryObject->getBindings());
+        $response = $this->statement($queryObject->getSql(), $queryObject->getBindings());
         $this->fireEvents('after-delete', $queryObject);
+        
+        return $response;
     }
 
     /**
@@ -388,10 +564,11 @@ class QueryBuilderHandler
      * @param $key
      * @param $operator
      * @param $value
+     * @param $joiner
      *
-     * @return $this
+     * @return \Pixie\QueryBuilder\QueryBuilderHandler $this
      */
-    public function where($key, $operator = null, $value = null)
+    public function where($key, $operator = null, $value = null, $joiner = 'AND')
     {
         // If two params are given then assume operator is =
         if (func_num_args() == 2) {
@@ -399,7 +576,7 @@ class QueryBuilderHandler
             $operator = '=';
         }
 
-        return $this->_where($key, $operator, $value);
+        return $this->_where($key, $operator, $value, $joiner);
     }
 
     /**
@@ -424,7 +601,7 @@ class QueryBuilderHandler
      * @param       $key
      * @param array $values
      *
-     * @return $this
+     * @return \Pixie\QueryBuilder\QueryBuilderHandler $this
      */
     public function whereIn($key, array $values)
     {
@@ -433,11 +610,11 @@ class QueryBuilderHandler
 
     /**
      * @param       $key
-     * @param array $values
+     * @param       $values
      *
      * @return $this
      */
-    public function whereNotIn($key, array $values)
+    public function whereNotIn($key, $values)
     {
         return $this->_where($key, 'NOT IN', $values, 'AND');
     }
@@ -588,7 +765,7 @@ class QueryBuilderHandler
      * @param        $value
      * @param string $joiner
      *
-     * @return $this
+     * @return \Pixie\QueryBuilder\QueryBuilderHandler $this
      */
     protected function _where($key, $operator = null, $value = null, $joiner = 'AND')
     {
@@ -718,5 +895,35 @@ class QueryBuilderHandler
     public function getStatements()
     {
         return $this->statements;
+    }
+
+    function getColumnNames( $table ){
+        $sql = 'SHOW COLUMNS FROM ' . $table;
+
+        $pdoStatement = $this->pdo->prepare($sql);
+
+        try {
+
+            $column_names = array();
+
+            if($pdoStatement->execute()){
+                $raw_column_data = $pdoStatement->fetchAll();
+
+                foreach($raw_column_data as $outer_key => $array){
+                    foreach($array as $inner_key => $value){
+
+                        if ($inner_key === 'Field'){
+                            if (!(int)$inner_key){
+                                $column_names[] = $value;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return $column_names;
+        } catch (Exception $e){
+            return $e->getMessage(); //return exception
+        }
     }
 }

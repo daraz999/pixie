@@ -119,15 +119,16 @@ abstract class BaseAdapter
     }
 
     /**
-     * Build Insert query
      *
-     * @param       $statements
+     * Build a generic insert/ignore/replace query
+     *
+     * @param $statements
      * @param array $data
-     *
+     * @param $type
      * @return array
-     * @throws Exception
+     * @throws \Pixie\Exception
      */
-    public function insert($statements, array $data)
+    private function doInsert($statements, array $data, $type)
     {
         if (!isset($statements['tables'])) {
             throw new Exception('No table specified', 3);
@@ -141,12 +142,16 @@ abstract class BaseAdapter
 
         foreach ($data as $key => $value) {
             $keys[] = $key;
-            $values[] = '?';
-            $bindings[] = $value;
+            if ($value instanceof Raw) {
+                $values[] = (string) $value;
+            } else {
+                $values[] =  '?';
+                $bindings[] = $value;
+            }
         }
 
         $sqlArray = array(
-            'INSERT INTO',
+            $type . ' INTO',
             $table,
             '(' . $this->arrayStr($keys, ',') . ')',
             'VALUES',
@@ -156,6 +161,48 @@ abstract class BaseAdapter
         $sql = $this->concatenateQuery($sqlArray, ' ', false);
 
         return compact('sql', 'bindings');
+    }
+
+    /**
+     * Build Insert query
+     *
+     * @param       $statements
+     * @param array $data
+     *
+     * @return array
+     * @throws Exception
+     */
+    public function insert($statements, array $data)
+    {
+        return $this->doInsert($statements, $data, 'INSERT');
+    }
+
+    /**
+     * Build Insert Ignore query
+     *
+     * @param       $statements
+     * @param array $data
+     *
+     * @return array
+     * @throws Exception
+     */
+    public function insertIgnore($statements, array $data)
+    {
+        return $this->doInsert($statements, $data, 'INSERT IGNORE');
+    }
+
+    /**
+     * Build Insert Ignore query
+     *
+     * @param       $statements
+     * @param array $data
+     *
+     * @return array
+     * @throws Exception
+     */
+    public function replace($statements, array $data)
+    {
+        return $this->doInsert($statements, $data, 'REPLACE');
     }
 
     /**
@@ -181,20 +228,32 @@ abstract class BaseAdapter
         $updateStatement = '';
 
         foreach ($data as $key => $value) {
-            $updateStatement .= $this->wrapSanitizer($key) . '=?,';
-            $bindings[] = $value;
+            if ($value instanceof Raw) {
+                $updateStatement .= $this->wrapSanitizer($key) . '=' . $value . ',';
+            } else {
+                $updateStatement .= $this->wrapSanitizer($key) . '=?,';
+                $bindings[] = $value;
+            }
+
         }
 
         $updateStatement = trim($updateStatement, ',');
 
         // Wheres
         list($whereCriteria, $whereBindings) = $this->buildCriteriaWithType($statements, 'wheres', 'WHERE');
+        
+        // Limit
+        $limit = isset($statements['limit']) ? 'LIMIT ' . $statements['limit'] : '';
+
+        $joinString = $this->buildJoin($statements);
 
         $sqlArray = array(
             'UPDATE',
             $table,
+            $joinString,
             'SET ' . $updateStatement,
             $whereCriteria,
+            $limit
         );
 
         $sql = $this->concatenateQuery($sqlArray, ' ', false);
@@ -219,10 +278,19 @@ abstract class BaseAdapter
 
         $table = end($statements['tables']);
 
+        $joinString = $this->buildJoin($statements);
+
         // Wheres
         list($whereCriteria, $whereBindings) = $this->buildCriteriaWithType($statements, 'wheres', 'WHERE');
+        
+        // Limit
+        $limit = isset($statements['limit']) ? 'LIMIT ' . $statements['limit'] : '';
 
-        $sqlArray = array('DELETE from', $table, $whereCriteria);
+        if (!empty($joinString) && $joinString != '')
+            $sqlArray = array('DELETE', $table . '.*', 'FROM', $table, $joinString, $whereCriteria, $limit);
+        else
+            $sqlArray = array('DELETE FROM', $table, $whereCriteria, $limit);
+
         $sql = $this->concatenateQuery($sqlArray, ' ', false);
         $bindings = $whereBindings;
 
