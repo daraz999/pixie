@@ -87,6 +87,24 @@ class QueryBuilderTest extends TestCase
         $this->assertEquals("SELECT * FROM `cb_my_table` WHERE NOT `foo` = 1", $query->getQuery()->getRawSql());
     }
 
+    public function testSelectDistinct()
+    {
+        $query = $this->builder->selectDistinct(array('name', 'surname'))->from('my_table');
+        $this->assertEquals("SELECT DISTINCT `name`, `surname` FROM `cb_my_table`", $query->getQuery()->getRawSql());
+    }
+
+    public function testSelectDistinctWithSingleColumn()
+    {
+        $query = $this->builder->selectDistinct('name')->from('my_table');
+        $this->assertEquals("SELECT DISTINCT `name` FROM `cb_my_table`", $query->getQuery()->getRawSql());
+    }
+
+    public function testSelectDistinctAndSelectCalls()
+    {
+        $query = $this->builder->select('name')->selectDistinct('surname')->select(array('birthday', 'address'))->from('my_table');
+        $this->assertEquals("SELECT DISTINCT `name`, `surname`, `birthday`, `address` FROM `cb_my_table`", $query->getQuery()->getRawSql());
+    }
+
     public function testSelectQueryWithNestedCriteriaAndJoins()
     {
         $builder = $this->builder;
@@ -103,16 +121,16 @@ class QueryBuilderTest extends TestCase
                             $q2->orWhere('value', 'LIKE', '%sana%');
                         });
                 })
-            ->join(array('person_details' => 'a'), $builder->raw('a.person_id'), '=', 'my_table.id')
+            ->join(array('person_details', 'a'), 'a.person_id', '=', 'my_table.id')
 
-            ->leftJoin(array('person_details' => 'b'), function($table) use ($builder)
+            ->leftJoin(array('person_details', 'b'), function($table) use ($builder)
                 {
-                    $table->on($builder->raw('b.person_id'), '=', 'my_table.id');
-                    $table->orOn($builder->raw('b.age'), '>', $builder->raw(1));
+                    $table->on('b.person_id', '=', 'my_table.id');
+                    $table->orOn('b.age', '>', $builder->raw(1));
                 })
         ;
 
-        $this->assertEquals("SELECT * FROM `cb_my_table` INNER JOIN `cb_person_details` AS `a` ON a.person_id = `cb_my_table`.`id` LEFT JOIN `cb_person_details` AS `b` ON b.person_id = `cb_my_table`.`id` OR b.age > 1 WHERE `cb_my_table`.`id` > 1 OR `cb_my_table`.`id` = 1 AND (`value` LIKE '%sana%' OR (`key` LIKE '%sana%' OR `value` LIKE '%sana%'))"
+        $this->assertEquals("SELECT * FROM `cb_my_table` INNER JOIN `cb_person_details` AS `cb_a` ON `cb_a`.`person_id` = `cb_my_table`.`id` LEFT JOIN `cb_person_details` AS `cb_b` ON `cb_b`.`person_id` = `cb_my_table`.`id` OR `cb_b`.`age` > 1 WHERE `cb_my_table`.`id` > 1 OR `cb_my_table`.`id` = 1 AND (`value` LIKE '%sana%' OR (`key` LIKE '%sana%' OR `value` LIKE '%sana%'))"
             , $query->getQuery()->getRawSql());
     }
 
@@ -168,7 +186,7 @@ class QueryBuilderTest extends TestCase
         $data = array('key' => 'Name',
                 'value' => 'Sana',);
 
-        $this->assertEquals("INSERT INTO cb_my_table (`key`,`value`) VALUES ('Name','Sana')"
+        $this->assertEquals("INSERT INTO `cb_my_table` (`key`,`value`) VALUES ('Name','Sana')"
             , $builder->getQuery('insert', $data)->getRawSql());
     }
 
@@ -178,7 +196,7 @@ class QueryBuilderTest extends TestCase
         $data = array('key' => 'Name',
             'value' => 'Sana',);
 
-        $this->assertEquals("INSERT IGNORE INTO cb_my_table (`key`,`value`) VALUES ('Name','Sana')"
+        $this->assertEquals("INSERT IGNORE INTO `cb_my_table` (`key`,`value`) VALUES ('Name','Sana')"
             , $builder->getQuery('insertignore', $data)->getRawSql());
     }
 
@@ -188,7 +206,7 @@ class QueryBuilderTest extends TestCase
         $data = array('key' => 'Name',
             'value' => 'Sana',);
 
-        $this->assertEquals("REPLACE INTO cb_my_table (`key`,`value`) VALUES ('Name','Sana')"
+        $this->assertEquals("REPLACE INTO `cb_my_table` (`key`,`value`) VALUES ('Name','Sana')"
             , $builder->getQuery('replace', $data)->getRawSql());
     }
 
@@ -204,7 +222,7 @@ class QueryBuilderTest extends TestCase
             'counter' => 2
         );
         $builder->from('my_table')->onDuplicateKeyUpdate($dataUpdate);
-        $this->assertEquals("INSERT INTO cb_my_table (`name`,`counter`) VALUES ('Sana',1) ON DUPLICATE KEY UPDATE `name`='Sana',`counter`=2"
+        $this->assertEquals("INSERT INTO `cb_my_table` (`name`,`counter`) VALUES ('Sana',1) ON DUPLICATE KEY UPDATE `name`='Sana',`counter`=2"
             , $builder->getQuery('insert', $data)->getRawSql());
     }
 
@@ -217,7 +235,7 @@ class QueryBuilderTest extends TestCase
             'value' => 'Amrin',
         );
 
-        $this->assertEquals("UPDATE cb_my_table SET `key`='Sana',`value`='Amrin' WHERE `value` = 'Sana'"
+        $this->assertEquals("UPDATE `cb_my_table` SET `key`='Sana',`value`='Amrin' WHERE `value` = 'Sana'"
             , $builder->getQuery('update', $data)->getRawSql());
     }
 
@@ -227,7 +245,7 @@ class QueryBuilderTest extends TestCase
 
         $builder = $this->builder->table('my_table')->where('value', '=', 'Amrin');
 
-        $this->assertEquals("DELETE from cb_my_table WHERE `value` = 'Amrin'"
+        $this->assertEquals("DELETE FROM `cb_my_table` WHERE `value` = 'Amrin'"
             , $builder->getQuery('delete')->getRawSql());
     }
 
@@ -236,13 +254,51 @@ class QueryBuilderTest extends TestCase
         $query = $this->builder
             ->from('t')
             ->orderBy('foo', 'DESC')
-            ->orderBy(array('bar', 'baz' => 'ASC'), 'DESC');
+            ->orderBy(array('bar', 'baz' => 'ASC', $this->builder->raw('raw1')), 'DESC')
+            ->orderBy($this->builder->raw('raw2'), 'DESC');
 
         $this->assertEquals(
-            'SELECT * FROM `cb_t` ORDER BY `foo` DESC, `bar` DESC, `baz` ASC',
+            'SELECT * FROM `cb_t` ORDER BY `foo` DESC, `bar` DESC, `baz` ASC, raw1 DESC, raw2 DESC',
             $query->getQuery()->getRawSql(),
             'ORDER BY is flexible enough!'
         );
     }
 
+    public function testSelectQueryWithNull()
+    {
+        $query = $this->builder->from('my_table')
+                ->whereNull('key1')
+                ->orWhereNull('key2')
+                ->whereNotNull('key3')
+                ->orWhereNotNull('key4');
+
+        $this->assertEquals(
+            "SELECT * FROM `cb_my_table` WHERE `key1` IS  NULL OR `key2` IS  NULL AND `key3` IS NOT NULL OR `key4` IS NOT NULL",
+            $query->getQuery()->getRawSql()
+        );
+    }
+
+    public function testIsPossibleToUseSubqueryInWhereClause()
+    {
+        $sub = clone $this->builder;
+        $query = $this->builder->from('my_table')->whereIn('foo', $this->builder->subQuery(
+            $sub->from('some_table')->select('foo')->where('id', 1)
+        ));
+        $this->assertEquals(
+            "SELECT * FROM `cb_my_table` WHERE `foo` IN (SELECT `foo` FROM `cb_some_table` WHERE `id` = 1)",
+            $query->getQuery()->getRawSql()
+        );
+    }
+
+    public function testIsPossibleToUseSubqueryInWhereNotClause()
+    {
+        $sub = clone $this->builder;
+        $query = $this->builder->from('my_table')->whereNotIn('foo', $this->builder->subQuery(
+            $sub->from('some_table')->select('foo')->where('id', 1)
+        ));
+        $this->assertEquals(
+            "SELECT * FROM `cb_my_table` WHERE `foo` NOT IN (SELECT `foo` FROM `cb_some_table` WHERE `id` = 1)",
+            $query->getQuery()->getRawSql()
+        );
+    }
 }

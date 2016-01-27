@@ -26,6 +26,10 @@ $config = array(
             'charset'   => 'utf8', // Optional
             'collation' => 'utf8_unicode_ci', // Optional
             'prefix'    => 'cb_', // Table prefix, optional
+            'options'   => array( // PDO constructor options, optional
+                PDO::ATTR_TIMEOUT => 5,
+                PDO::ATTR_EMULATE_PREPARES => false,
+            ),
         );
 
 new \Pixie\Connection('mysql', $config, 'QB');
@@ -81,17 +85,21 @@ Library on [Packagist](https://packagist.org/packages/usmanhalalit/pixie).
 
  - [Connection](#connection)
     - [Alias](#alias)
+       - [Code Completion](#code-completion)
     - [Multiple Connection](#alias)
     - [SQLite and PostgreSQL Config Sample](sqlite-and-postgresql-config-sample)
  - [Query](#query)
  - [**Select**](#select)
     - [Get Easily](#get-easily)
     - [Multiple Selects](#multiple-selects)
+    - [Select Distinct](#select-distinct)
     - [Get All](#get-all)
     - [Get First Row](#get-first-row)
     - [Get Rows Count](#get-rows-count)
  - [**Where**](#where)
     - [Where In](#where-in)
+    - [Where Between](#where-between)
+    - [Where Null](#where-null)
     - [Grouped Where](#grouped-where)
  - [Group By and Order By](#group-by-and-order-by)
  - [Having](#having)
@@ -105,6 +113,7 @@ Library on [Packagist](https://packagist.org/packages/usmanhalalit/pixie).
     - [Insert with ON DUPLICATE KEY statement](#insert-with-on-duplicate-key-statement)
  - [**Update**](#update)
  - [**Delete**](#delete)
+ - [Transactions](#transactions)
  - [Get Built Query](#get-built-query)
  - [Sub Queries and Nested Queries](#sub-queries-and-nested-queries)
  - [Get PDO Instance](#get-pdo-instance)
@@ -148,7 +157,7 @@ new \Pixie\Connection('mysql', $config, 'MyAlias');
 ```
 `MyAlias` is the name for the class alias you want to use (like `MyAlias::table(...)`), you can use whatever name (with Namespace also, `MyNamespace\\MyClass`) you like or you may skip it if you don't need an alias. Alias gives you the ability to easily access the QueryBuilder class across your application.
 
-When not using an alias you can instanciate the QueryBuilder handler separately, helpful for Dependency Injection and Testing.
+When not using an alias you can instantiate the QueryBuilder handler separately, helpful for Dependency Injection and Testing.
 
 ```PHP
 $connection = new \Pixie\Connection('mysql', $config));
@@ -160,6 +169,17 @@ var_dump($query->get());
 ```
 
 `$connection` here is optional, if not given it will always associate itself to the first connection, but it can be useful when you have multiple database connections.
+
+#### Code Completion
+When using an alias, you can enable IDE code completion by creating a "stub" for that alias. For example
+
+```PHP
+class MyAlias extends \Pixie\QueryBuilder\QueryBuilderHandlerStub {
+
+}
+```
+
+It is important that your stub *is not* included anywhere in your project. The presence of the file should be sufficient to enable code completion.
 
 ### SQLite and PostgreSQL Config Sample
 ```PHP
@@ -217,6 +237,12 @@ $query = QB::table('my_table')->select('*');
 Using select method multiple times `select('a')->select('b')` will also select `a` and `b`. Can be useful if you want to do conditional selects (within a PHP `if`).
 
 
+#### Select Distinct
+```PHP
+->selectDistinct(array('mytable.myfield1', 'mytable.myfield2'));
+```
+
+
 #### Get All
 Return an array.
 ```PHP
@@ -268,6 +294,22 @@ QB::table('my_table')
     ->whereNotIn('name', array('heera', 'dalim'))
     ->orWhereNotIn('name', array('usman', 'sana'))
     ;
+```
+
+#### Where Between
+```PHP
+QB::table('my_table')
+    ->whereBetween('id', 10, 100)
+    ->orWhereBetween('status', 5, 8);
+```
+
+#### Where Null
+```PHP
+QB::table('my_table')
+    ->whereNull('modified')
+    ->orWhereNull('field2')
+    ->whereNotNull('field3')
+    ->orWhereNotNull('field4');
 ```
 
 #### Grouped Where
@@ -372,8 +414,8 @@ ___
 ### Insert
 ```PHP
 $data = array(
-    'name' = 'Sana',
-    'description' = 'Blah'
+    'name' => 'Sana',
+    'description' => 'Blah'
 );
 $insertId = QB::table('my_table')->insert($data);
 ```
@@ -384,12 +426,12 @@ $insertId = QB::table('my_table')->insert($data);
 ```PHP
 $data = array(
     array(
-        'name' = 'Sana',
-        'description' = 'Blah'
+        'name'        => 'Sana',
+        'description' => 'Blah'
     ),
     array(
-        'name' = 'Usman',
-        'description' = 'Blah'
+        'name'        => 'Usman',
+        'description' => 'Blah'
     ),
 );
 $insertIds = QB::table('my_table')->insert($data);
@@ -400,12 +442,12 @@ In case of batch insert, it will return an array of insert ids.
 #### Insert with ON DUPLICATE KEY statement
 ```PHP
 $data = array(
-    'name' = 'Sana',
-    'counter' = 1
+    'name'    => 'Sana',
+    'counter' => 1
 );
 $dataUpdate = array(
-    'name' = 'Sana',
-    'counter' = 2
+    'name'    => 'Sana',
+    'counter' => 2
 );
 $insertId = QB::table('my_table')->onDuplicateKeyUpdate($dataUpdate)->insert($data);
 ```
@@ -413,8 +455,8 @@ $insertId = QB::table('my_table')->onDuplicateKeyUpdate($dataUpdate)->insert($da
 ### Update
 ```PHP
 $data = array(
-    'name' = 'Sana',
-    'description' = 'Blah'
+    'name'        => 'Sana',
+    'description' => 'Blah'
 );
 
 QB::table('my_table')->where('id', 5)->update($data);
@@ -427,6 +469,45 @@ Will update the name field to Sana and description field to Blah where id = 5.
 QB::table('my_table')->where('id', '>', 5)->delete();
 ```
 Will delete all the rows where id is greater than 5.
+
+### Transactions
+
+Pixie has the ability to run database "transactions", in which all database
+changes are not saved until committed. That way, if something goes wrong or
+differently then you intend, the database changes are not saved and no changes
+are made.
+
+Here's a basic transaction:
+
+```PHP
+QB::transaction(function ($qb) {
+    $qb->table('my_table')->insert(array(
+        'name' => 'Test',
+        'url' => 'example.com'
+    ));
+
+    $qb->table('my_table')->insert(array(
+        'name' => 'Test2',
+        'url' => 'example.com'
+    ));
+});
+```
+
+If this were to cause any errors (such as a duplicate name or some other such
+error), neither data set would show up in the database. If not, the changes would
+be successfully saved.
+
+If you wish to manually commit or rollback your changes, you can use the
+`commit()` and `rollback()` methods accordingly:
+
+```PHP
+QB::transaction(function (qb) {
+    $qb->table('my_table')->insert(array(/* data... */));
+
+    $qb->commit(); // to commit the changes (data would be saved)
+    $qb->rollback(); // to rollback the changes (data would be rejected)
+});
+```
 
 ### Get Built Query
 Sometimes you may need to get the query string, its possible.
@@ -587,7 +668,4 @@ Here are some cases where Query Events can be extremely helpful:
 ___
 If you find any typo then please edit and send pull request.
 
-&copy; 2013 [Muhammad Usman](http://usman.it/). Licensed under MIT license.
-
-
-[![Bitdeli Badge](https://d2weczhvl823v0.cloudfront.net/usmanhalalit/pixie/trend.png)](https://bitdeli.com/free "Bitdeli Badge")
+&copy; 2015 [Muhammad Usman](http://usman.it/). Licensed under MIT license.
