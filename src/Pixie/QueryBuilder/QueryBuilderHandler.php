@@ -506,6 +506,12 @@ class QueryBuilderHandler
      */
     public function orderBy($field, $type = 'ASC')
     {
+        $whitelist = ['asc', 'ASC', 'desc', 'DESC'];
+
+        if (!in_array($type, $whitelist)) {
+            $type = $whitelist[0];
+        }
+
         $field = $this->addTablePrefix($field);
         $this->statements['orderBys'][] = compact('field', 'type');
         return $this;
