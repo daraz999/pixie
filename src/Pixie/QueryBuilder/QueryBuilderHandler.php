@@ -524,7 +524,7 @@ class QueryBuilderHandler
      */
     public function limit($limit)
     {
-        $this->statements['limit'] = $limit;
+        $this->statements['limit'] = (int) $limit;
         return $this;
     }
 
@@ -535,7 +535,7 @@ class QueryBuilderHandler
      */
     public function offset($offset)
     {
-        $this->statements['offset'] = $offset;
+        $this->statements['offset'] = (int) $offset;
         return $this;
     }
 
